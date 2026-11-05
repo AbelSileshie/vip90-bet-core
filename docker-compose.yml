@@ -1,30 +1,11 @@
-# VIP90.bet — tek komutla kurulum: `docker compose up -d`
-#
-# Başlamadan önce:
-#   cp .env.docker.example .env   (DOMAIN ve zorunlu gizli değerleri doldur)
-#
-# Trafik akışı: internet → caddy (80/443, otomatik HTTPS) → app:3001 → mongo
-# Mongo ve app dış dünyaya port açmaz; yalnızca caddy yayınlanır.
-
 services:
   mongo:
     image: mongo:7
     restart: unless-stopped
-    # Tek düğümlü replica set — settleEvent (bkz. services/settlement.js)
-    # gibi multi-document transaction kullanan kod, standalone mongod'da
-    # "Transaction numbers are only allowed on a replica set member or
-    # mongos" hatasıyla ÇALIŞMIYOR (2026-09-16'da Docker installer
-    # doğrulamasında bulundu — bahis sonuçlandırma tamamen bozuktu).
     command: ["--replSet", "rs0", "--bind_ip_all"]
     volumes:
       - mongodata:/data/db
     healthcheck:
-      # Tek düğümlü replica set'i bir kerelik kurar (initiate idempotent).
-      # Üye adresi compose servis adı OLMALI (mongo:27017): sürücü bağlandıktan
-      # sonra replica set yapılandırmasındaki adrese geçer; 'localhost' app
-      # konteynerinde app'in kendisidir ve bağlantı ECONNREFUSED ile düşer
-      # (2026-10-08, temiz Docker kurulumunda bulundu). Eski kurulumlarda
-      # 'localhost' ile başlatılmış volume bir kez mongo:27017'ye çevrilir.
       test: >
         mongosh --quiet --eval "
         try { const c = rs.conf(); if (c.members[0].host !== 'mongo:27017') { c.members[0].host = 'mongo:27017'; rs.reconfig(c, {force: true}) } }
@@ -40,41 +21,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      # Dockerfile'da bu stage'den SONRA bir `test` stage'i de var (bkz.
-      # docker-compose.test.yml) — target belirtilmezse Docker'ın "hedef
-      # yoksa SON stage'i build et" varsayılanı test image'ını üretir ve
-      # bu servis yanlışlıkla test-runner'ı çalıştırır (production sunucusu
-      # hiç ayağa kalkmaz, Caddy 502 döner).
       target: production
     restart: unless-stopped
     env_file:
       - .env
     environment:
       NODE_ENV: production
-      # Atlas URI'sini (.env'den geleni) compose içi mongo ile eziyoruz —
-      # tek VPS senaryosunda veritabanı aynı compose ağındadır.
-      # replicaSet=rs0: transaction desteği için zorunlu (yukarı bak).
       MONGODB_URI: mongodb://mongo:27017/betzone?replicaSet=rs0
+    expose:
+      - "3001"
     depends_on:
       mongo:
         condition: service_healthy
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN:-localhost}
-    volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - app
-
 volumes:
   mongodata:
-  caddy_data:
-  caddy_config:
